@@ -1,0 +1,45 @@
+# Panoramas / outputs
+output-*/
+panoramas/
+*.db
+*.db-shm
+*.db-wal
+
+# Credentials / cookies
+*cookies*.txt
+*credentials*.json
+*.env
+
+# URL lists / batch files
+all_urls*.txt
+expanded_urls.txt
+remaining_urls.txt
+completed_slugs.txt
+batch_*.txt
+chunk_*.txt
+
+# Logs
+logs/
+*.log
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+
+# Node
+node_modules/
+
+# Browser profile
+chrome_profile_360/
+
+# IDE
+.vscode/
+.idea/
+.claude/
+
+# OS
+.DS_Store
+Thumbs.db
