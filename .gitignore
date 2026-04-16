@@ -1,45 +1,54 @@
-# Panoramas / outputs
+# Downloaded panoramas and tiles
 output-*/
-panoramas/
-*.db
-*.db-shm
-*.db-wal
+panama-*/
+output/
+tiles/
 
-# Credentials / cookies
-*cookies*.txt
-*credentials*.json
-*.env
-
-# URL lists / batch files
-all_urls*.txt
-expanded_urls.txt
-remaining_urls.txt
-completed_slugs.txt
-batch_*.txt
-chunk_*.txt
-
-# Logs
-logs/
-*.log
+# Logs (large binary logs, JSON results are committed)
+logs/*.log
 
 # Python
-__pycache__/
 *.pyc
-*.pyo
+__pycache__/
+.env
 .venv/
 venv/
 
 # Node
 node_modules/
+package-lock.json
 
-# Browser profile
+# Chrome profile (cookies/session)
 chrome_profile_360/
 
 # IDE
 .vscode/
 .idea/
-.claude/
 
 # OS
 .DS_Store
 Thumbs.db
+
+# Temporary files
+*.tmp
+
+# Sensitive: browser session cookies (DO NOT COMMIT)
+360cities_cookies*.txt
+
+# Large data exports (use Drive for these)
+*.db
+*.db-wal
+*.db-shm
+*.db.zip
+panoramas_snapshot.db
+
+# Large URL list files (regenerable from sitemap)
+all_urls_full.txt
+expanded_urls.txt
+remaining_urls.txt
+batch_*.txt
+chunk_*.txt
+top*.txt
+
+# Claude tools dir
+.claude/

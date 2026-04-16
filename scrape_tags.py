@@ -55,6 +55,11 @@ CREATE TABLE IF NOT EXISTS panoramas (
     license_url   TEXT,
     editor_pick   INTEGER,
     is_gigapixel  INTEGER,
+    image_id      INTEGER,
+    likes         INTEGER,
+    views         INTEGER,
+    description_full TEXT,
+    gigapixel_real INTEGER,
     scraped_at    INTEGER,
     http_status   INTEGER,
     error         TEXT
@@ -97,6 +102,10 @@ MIGRATIONS = [
     "ALTER TABLE panoramas ADD COLUMN author_handle TEXT",
     "ALTER TABLE panoramas ADD COLUMN editor_pick INTEGER",
     "ALTER TABLE panoramas ADD COLUMN is_gigapixel INTEGER",
+    "ALTER TABLE panoramas ADD COLUMN image_id INTEGER",
+    "ALTER TABLE panoramas ADD COLUMN likes INTEGER",
+    "ALTER TABLE panoramas ADD COLUMN description_full TEXT",
+    "ALTER TABLE panoramas ADD COLUMN gigapixel_real INTEGER",
 ]
 
 def load_cookie_jar(path):
@@ -133,6 +142,9 @@ AUTHOR_HANDLE_RE = re.compile(r"user\s*=\s*'([a-z0-9][a-z0-9_-]*)'")
 SET_RE = re.compile(r'href=["\'](?:https://www\.360cities\.net)?/sets/([a-z0-9][a-z0-9_-]+)', re.IGNORECASE)
 COMMENDATION_PICK_RE = re.compile(r'pano_commendation\s+commendation_pick[^"]*', re.IGNORECASE)
 COMMENDATION_GIGA_RE = re.compile(r'pano_commendation\s+commendation_gigapixel[^"]*', re.IGNORECASE)
+LIKES_RE = re.compile(r'image-popularity-score["\' >][^>]*>(\d+)\s*Like', re.IGNORECASE)
+IMAGE_ID_RE = re.compile(r"/data/get_no_of_views['\"]\s*,\s*\{\s*id:\s*(\d+)")
+DESC_FULL_RE = re.compile(r'<div class="col-md-12 collapse-group">(.*?)</div>\s*</div>', re.DOTALL)
 
 def parse(html):
     tags = []
@@ -207,6 +219,35 @@ def parse(html):
     if m:
         is_gigapixel = 0 if 'disp_none' in m.group(0) else 1
 
+    # Likes count (server-rendered)
+    likes = None
+    m = LIKES_RE.search(html)
+    if m:
+        try: likes = int(m.group(1))
+        except: pass
+
+    # Image numeric id (used for AJAX views endpoint)
+    image_id = None
+    m = IMAGE_ID_RE.search(html)
+    if m:
+        try: image_id = int(m.group(1))
+        except: pass
+
+    # Full description (long form)
+    description_full = None
+    m = DESC_FULL_RE.search(html)
+    if m:
+        raw = m.group(1)
+        # Strip HTML tags, collapse whitespace
+        text = re.sub(r'<br\s*/?>', '\n', raw)
+        text = re.sub(r'</p>', '\n\n', text)
+        text = re.sub(r'<[^>]+>', '', text)
+        text = re.sub(r'\n{3,}', '\n\n', text)
+        text = re.sub(r'[ \t]+', ' ', text)
+        text = text.strip()
+        if text:
+            description_full = text
+
     return {
         "tags": uniq,
         "sets": sets_,
@@ -228,6 +269,9 @@ def parse(html):
         "license_url": license_url,
         "editor_pick": editor_pick,
         "is_gigapixel": is_gigapixel,
+        "likes": likes,
+        "image_id": image_id,
+        "description_full": description_full,
     }
 
 def main():
@@ -263,7 +307,7 @@ def main():
     else:
         # Skip rows with new schema filled (thumbnail_url IS NOT NULL OR error)
         done = {r[0] for r in conn.execute(
-            "SELECT slug FROM panoramas WHERE http_status=200 AND is_gigapixel IS NOT NULL"
+            "SELECT slug FROM panoramas WHERE http_status=200 AND image_id IS NOT NULL"
         )}
         todo = [u for u in urls if slug_of(u) not in done]
     if limit: todo = todo[:limit]
@@ -277,13 +321,31 @@ def main():
     db_lock = Lock(); ctr_lock = Lock()
     counter = {"ok": 0, "err": 0, "total": len(todo)}
 
+    def fetch_views(image_id, referer):
+        if not image_id: return None
+        try:
+            req = urllib.request.Request(
+                f"https://www.360cities.net/data/get_no_of_views?id={image_id}",
+                headers={"User-Agent": UA, "X-Requested-With": "XMLHttpRequest",
+                         "Referer": referer, "Accept": "application/json"})
+            with opener.open(req, timeout=15) as r:
+                if r.status == 200:
+                    import json
+                    data = json.loads(r.read())
+                    return int(data.get("view_count", 0))
+        except Exception: pass
+        return None
+
     def worker(url):
         slug = slug_of(url)
         try:
             status, html = fetch(url, opener)
             if status != 200:
                 return slug, url, None, f"HTTP {status}", status
-            return slug, url, parse(html), None, status
+            data = parse(html)
+            # Second request for views
+            data["views"] = fetch_views(data.get("image_id"), url)
+            return slug, url, data, None, status
         except Exception as e:
             return slug, url, None, str(e)[:200], 0
 
@@ -291,15 +353,21 @@ def main():
         with db_lock:
             ts = int(time.time())
             if d:
+                # Compute gigapixel_real (>= 1 billion pixels)
+                gpr = 1 if (d.get("res_w") and d.get("res_h") and d["res_w"]*d["res_h"] >= 1_000_000_000) else 0
                 conn.execute("""INSERT OR REPLACE INTO panoramas
                     (slug,url,title,og_title,author,author_handle,copyright,description,lat,lon,
                      pano_type,resolution,res_w,res_h,date_taken,date_uploaded,date_published,
-                     views,thumbnail_url,license_url,editor_pick,is_gigapixel,scraped_at,http_status,error)
-                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                     views,thumbnail_url,license_url,editor_pick,is_gigapixel,
+                     image_id,likes,description_full,gigapixel_real,
+                     scraped_at,http_status,error)
+                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                     (slug, url, d["title"], d["og_title"], d["author"], d["author_handle"], d["copyright"], d["description"],
                      d["lat"], d["lon"], d["pano_type"], d["resolution"], d["res_w"], d["res_h"],
                      d["date_taken"], d["date_uploaded"], d["date_published"],
-                     d["views"], d["thumbnail_url"], d["license_url"], d["editor_pick"], d["is_gigapixel"], ts, status, None))
+                     d["views"], d["thumbnail_url"], d["license_url"], d["editor_pick"], d["is_gigapixel"],
+                     d["image_id"], d["likes"], d["description_full"], gpr,
+                     ts, status, None))
                 conn.execute("DELETE FROM tags WHERE panorama_slug=?", (slug,))
                 for ts_, tn in d["tags"]:
                     conn.execute("INSERT OR IGNORE INTO tags VALUES (?,?,?)", (slug, ts_, tn))
